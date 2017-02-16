@@ -11,7 +11,6 @@ class RoleManagement:
     async def togglerole(self, ctx, role : discord.Role):
         """Allows users to toggle a role on themselves.  You don't have to @mention the role, just type the name. Example: .togglerole lfg"""
 
-        #Your code will go here
         try:
             if role in ctx.message.author.roles:
                 await self.bot.remove_roles(ctx.message.author, role)
