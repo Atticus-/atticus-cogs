@@ -1,6 +1,7 @@
 {
   "AUTHOR": "Atticus-",
   "INSTALL_MSG": "Thanks for installing! Hopefully this works.",
+  "DISABLED": false,
   "NAME": "RoleManagement",
   "SHORT": "Allows Red to manage discord roles on users' behalf.",
   "DESCRIPTION": "Allows Red to manage discord roles on users' behalf."
