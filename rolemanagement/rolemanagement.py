@@ -8,12 +8,13 @@ class RoleManagement:
         self.bot = bot
 
     @commands.command()
-    async def mycom(self):
-        """This does stuff!"""
+    async def togglerole(self, ctx, role : discord.Role):
+        """Allows users to toggle a role on themselves."""
 
         #Your code will go here
-        await self.bot.say("I can do stuff!")
+        already_has_role = role in ctx.message.author.roles
+        await self.bot.say("Already in role? "+already_has_role)
 
 def setup(bot):
-    bot.add_cog(Mycog(bot))
+    bot.add_cog(RoleManagement(bot))
 
