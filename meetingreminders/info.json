@@ -1,0 +1,8 @@
+{
+  "AUTHOR": "Atticus-",
+  "INSTALL_MSG": "Done installing MeetingReminders. Enjoy!",
+  "DISABLED": false,
+  "NAME": "MeetingReminders",
+  "SHORT": "Watch a Google Calendar and send reminders",
+  "DESCRIPTION": "Allows Red to watch a Google calendar and remind users of upcoming meetings."
+}
