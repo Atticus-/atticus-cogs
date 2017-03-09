@@ -94,7 +94,7 @@ class MeetingReminders:
 
     @meetings.command(pass_context=True, no_pm=True)
     async def remindertime(self, ctx, minutes: int):
-        """Sets the number of minutes before meetings to remind attendees. Set to 0 for no advance warning, only a reminder when the meeting is starting.."""
+        """Sets the number of minutes before meetings to remind attendees. Set to 0 for no advance warning, only a reminder when the meeting is starting."""
         settings = self._get_settings(ctx.message.server.id)
         settings['soon'] = minutes
         self._save_settings()
@@ -124,7 +124,7 @@ class MeetingReminders:
         return sorted(meetings, key=lambda x: x['start'])
 
     def _meeting_str(self, meeting, zone):
-        start_time_format = '%a %b %m, %l:%M%P'
+        start_time_format = '%a %b %-d, %l:%M%P'
         end_time_format = '%l:%M%P %Z'
         time_string = "%s - %s" % (meeting['start'].astimezone(zone).strftime(start_time_format), meeting['end'].astimezone(zone).strftime(end_time_format))
         return "**Title:** %s\n**Time:** %s\n**Description:** %s" % (meeting['summary'], time_string, meeting['description'])
