@@ -1,17 +1,30 @@
-import urllib
 import asyncio
-import time
 import os
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from discord.ext import commands
 from cogs.utils.dataIO import dataIO
 from __main__ import send_cmd_help
 
 try:
-    import vobject
-    vobjectAvailable = True
+    from apiclient import discovery
+    from oauth2client import client
+    from oauth2client.service_account import ServiceAccountCredentials
+    oauth2Available = True
 except:
-    vobjectAvailable = False
+    oauth2Available = False
+
+try:
+    import httplib2
+    httplib2Available = True
+except:
+    httplib2Available = False
+
+try:
+    import dateutil.parser
+    dateutilAvailable = True
+except:
+    dateutilAvailable = False
 
 try:
     from pytz import timezone
@@ -22,7 +35,7 @@ except:
 class MeetingReminders:
     """Watches a Google calendar and reminds attendees when meetings approach"""
 
-    OLD_MEETING_CUTOFF = 86400 # One day
+    KEEP_HISTORY = timedelta(hours=1)
     AUTO_REFRESH_INTERVAL = 60 # One minute
 
     def __init__(self, bot):
@@ -42,8 +55,20 @@ class MeetingReminders:
             await send_cmd_help(ctx)
 
     @meetings.command(pass_context=True, no_pm=True)
+    async def sharewith(self, ctx, email):
+        """Shares the google calendar with a specified email. All viewers will be able to create and modify events."""
+        if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
+            await self.bot.say("That doesn't look like a valid email to me.")
+            return
+
+        rule = {'role': 'writer', 'scope': {'type': 'user', 'value': email}}
+        client = self._get_google_client(ctx.message.server.id)
+        client.acl().insert(calendarId='primary', body=rule).execute()
+        await self.bot.say("Successfully added user. Check your Google calendar list.")
+
+    @meetings.command(pass_context=True, no_pm=True)
     async def list(self, ctx, tz=None):
-        """Lists all of the future meetings. Optionally provide a display timezone like 'US/Pacific'."""
+        """Lists the next five meetings. Optionally provide a display timezone like 'US/Pacific'."""
         server_id = ctx.message.server.id
         settings = self._get_settings(server_id)
         zone = timezone(settings['timezone'])
@@ -51,34 +76,37 @@ class MeetingReminders:
             try:
                 zone = timezone(tz)
             except:
-                await self.bot.say("Time zone provided isn't valid. Using %s instead."%settings['timezone'])
+                await self.bot.say("Time zone provided isn't valid. Using %s instead."%zone)
 
-        if not server_id in self.calendars or self.settings[server_id]['ics_url'] == None:
-            await self.bot.say("No calendar for this server yet. Have you run [p]meetings url <url> yet?")
+        if not server_id in self.calendars or self.settings[server_id]['creds_file'] == 'None':
+            await self.bot.say("No calendar for this server. Have you run [p]meetings creds <filename> yet?")
         else:
-            meetings = self.calendars[server_id]
-            await self.bot.say("------------------------------------\n"+"\n\n------------------------------------\n".join([self._meeting_str(m, zone) for m in meetings]))
-
+            events = self.calendars[server_id]
+            if len(events) > 0:
+                await self.bot.say("------------------------------------\n"+"\n\n------------------------------------\n".join([self._meeting_str(m, zone) for m in events]))
+            else:
+                await self.bot.say("No upcoming meetings found.")
 
     @meetings.command(pass_context=True, no_pm=True)
     async def refresh(self, ctx):
-        """Immediately loads changes from the source calendar."""
+        """Immediately loads changes from the source calendar. Usually unecessary due to automatic updates."""
         self._load_calendars()
         await self.bot.say("Refreshed calendar.")
 
     @meetings.command(pass_context=True, no_pm=True)
-    async def url(self, ctx, url):
-        """Sets the .ics URL to use for managing meetings."""
+    async def creds(self, ctx, filename):
+        """Sets the filename holding credentials to use for managing meetings. The file should be stored in the data/meetingreminders directory. To obtain one, follow this documentation: https://developers.google.com/identity/protocols/OAuth2ServiceAccount"""
         settings = self._get_settings(ctx.message.server.id)
-        old_url = settings['ics_url']
+        old_file = settings['creds_file']
         try:
-            settings['ics_url'] = url
-            self._save_settings()
+            settings['creds_file'] = filename
             self._load_calendars()
-            await self.bot.say("Done setting URL for this server.")
+            await self.bot.say("Done setting credentials for this server.")
         except Exception as err:
-            settings['ics_url'] = old_url
-            await self.bot.say("Couldn't update url: %s"%err)
+            settings['creds_file'] = old_file
+            await self.bot.say("Uh oh, looks like that file didn't work: %s"%err)
+
+        self._save_settings()
 
     @meetings.command(pass_context=True, no_pm=True)
     async def timezone(self, ctx, zone):
@@ -103,35 +131,31 @@ class MeetingReminders:
     ####
     # Helper functions
     ####
+    def _get_google_client(self, server_id):
+        settings = self._get_settings(server_id)
+        scopes = ['https://www.googleapis.com/auth/calendar.readonly', 'https://www.googleapis.com/auth/calendar']
+        credentials = ServiceAccountCredentials.from_json_keyfile_name(os.path.join('data/meetingreminders', settings['creds_file']), scopes=scopes)
+        http_auth = credentials.authorize(httplib2.Http())
+        return discovery.build('calendar', 'v3', http=http_auth)
+
     def _load_calendars(self):
-        for server_id, settings in self.settings.items():
-            ics = urllib.request.urlopen(settings["ics_url"])
-            cal_str = ics.read().decode('utf-8')
-            ics.close()
-
-            self.calendars[server_id] = self._process_ical(cal_str)
-
-    def _process_ical(self, calendar_str):
-        calendar = vobject.readOne(calendar_str)
-        meetings = []
-        for vevent in calendar.vevent_list:
-            if type(vevent.dtstart.value) is datetime and vevent.dtstart.value.timestamp() > (time.time() - self.OLD_MEETING_CUTOFF):
-                # Currently, we only pay attention to meetings with a start time within a day ago
-                # TODO: Decide how to handle all-day events
-                meeting = {'start': vevent.dtstart.value, 'end': vevent.dtend.value, 'summary':vevent.summary.value, 'description':vevent.description.value}
-                meetings.append(meeting)
-
-        return sorted(meetings, key=lambda x: x['start'])
+        for server_id in self.settings.keys():
+            client = self._get_google_client(server_id)
+            time_min = datetime.now(timezone('UTC')) - self.KEEP_HISTORY
+            self.calendars[server_id] = client.events().list(calendarId='primary', timeMin=time_min.isoformat(), maxResults=5, singleEvents=True, orderBy='startTime').execute()['items']
 
     def _meeting_str(self, meeting, zone):
+        start_time = dateutil.parser.parse(meeting['start']['dateTime']).astimezone(zone)
+        end_time = dateutil.parser.parse(meeting['end']['dateTime']).astimezone(zone)
         start_time_format = '%a %b %-d, %l:%M%P'
         end_time_format = '%l:%M%P %Z'
-        time_string = "%s - %s" % (meeting['start'].astimezone(zone).strftime(start_time_format), meeting['end'].astimezone(zone).strftime(end_time_format))
-        return "**Title:** %s\n**Time:** %s\n**Description:** %s" % (meeting['summary'], time_string, meeting['description'])
+        time_string = "%s - %s" % (start_time.strftime(start_time_format), end_time.strftime(end_time_format))
+
+        return "**Title:** %s\n**Time:** %s\n**Description:** %s" % (meeting['summary'], time_string, meeting.get('description', "_no description provided_"))
 
     def _get_settings(self, server_id):
         if not server_id in self.settings:
-            self.settings[server_id] = {'timezone':'US/Eastern', 'ics_url':None, 'soon':60}
+            self.settings[server_id] = {'timezone':'US/Eastern', 'creds_file':'None', 'soon':60}
             self._save_settings()
 
         return self.settings[server_id]
@@ -141,7 +165,7 @@ class MeetingReminders:
 
     async def _pm_attendees(self, meeting, server_id, msg):
         try:
-            for username in [u.strip('@ ') for u in meeting['description'].splitlines()[0].split(',')]:
+            for username in [u.strip('@ ') for u in meeting.get('description', '').splitlines()[0].split(',')]:
                 server = self.bot.get_server(server_id)
                 if server:
                     member = server.get_member_named(username)
@@ -167,17 +191,19 @@ class MeetingReminders:
                 zone = timezone(settings['timezone'])
 
                 for meeting in calendar:
-                    start = meeting['start'].timestamp()
-                    if settings['soon'] > 0 and start < (time.time() + int(settings['soon'])*60) and not meeting in self.soon_notified:
+                    now = datetime.now(timezone('UTC'))
+                    meeting_start = dateutil.parser.parse(meeting['start']['dateTime'])
+                    if settings['soon'] > 0 and meeting_start < (now + timedelta(seconds=settings['soon'])) and not meeting in self.soon_notified:
                         self.soon_notified.append(meeting)
                         await self._pm_attendees(meeting, server_id, "Your meeting starts soon!\n%s"%self._meeting_str(meeting, zone))
-                    elif start < time.time() and not meeting in self.now_notified:
+                    elif meeting_start < now and not meeting in self.now_notified:
                         self.now_notified.append(meeting)
                         await self._pm_attendees(meeting, server_id, "Your meeting is starting now!\n%s"%self._meeting_str(meeting, zone))
 
             # Prune notified sets so they don't get too big
-            self.soon_notified = [m for m in self.soon_notified if m['start'].timestamp() > (time.time() - self.OLD_MEETING_CUTOFF)]
-            self.now_notified = [m for m in self.now_notified if m['start'].timestamp() > (time.time() - self.OLD_MEETING_CUTOFF)]
+            time_min = datetime.now(timezone('UTC')) - self.KEEP_HISTORY
+            self.soon_notified = [m for m in self.soon_notified if dateutil.parser.parse(meeting['start']['dateTime']) > time_min]
+            self.now_notified = [m for m in self.now_notified if dateutil.parser.parse(meeting['start']['dateTime']) > time_min]
 
             await asyncio.sleep(self.AUTO_REFRESH_INTERVAL)
 
@@ -197,8 +223,12 @@ def check_files():
         dataIO.save_json("data/meetingreminders/settings.json", {})
 
 def setup(bot):
-    if not vobjectAvailable:
-        raise RuntimeError("You need to run 'pip3 install vobject'")
+    if not oauth2Available:
+        raise RuntimeError("You need to run 'pip3 install google-api-python-client'")
+    if not httplib2Available:
+        raise RuntimeError("You need to run 'pip3 install httplib2'")
+    if not dateutilAvailable:
+        raise RuntimeError("You need to run 'pip3 install python-dateutil'")
     if not pytzAvailable:
         raise RuntimeError("You need to run 'pip3 install pytz'")
 
@@ -209,3 +239,4 @@ def setup(bot):
     loop.create_task(cog.check_meetings())
 
     bot.add_cog(cog)
+
