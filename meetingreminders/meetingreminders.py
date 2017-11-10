@@ -165,7 +165,10 @@ class MeetingReminders:
 
     async def _pm_attendees(self, meeting, server_id, msg):
         try:
-            for username in [u.strip('@ ') for u in meeting.get('description', '').splitlines()[0].split(',')]:
+            attendees = [u.strip('@ ') for u in meeting.get('description', '').splitlines()[0].split(',')]
+            print("PMing attendees of %s: "%meeting['summary'] + str(attendees))
+            print(msg)
+            for username in attendees:
                 server = self.bot.get_server(server_id)
                 if server:
                     member = server.get_member_named(username)
@@ -193,7 +196,7 @@ class MeetingReminders:
                 for meeting in calendar:
                     now = datetime.now(timezone('UTC'))
                     meeting_start = dateutil.parser.parse(meeting['start']['dateTime'])
-                    if settings['soon'] > 0 and meeting_start < (now + timedelta(seconds=settings['soon'])) and not meeting in self.soon_notified:
+                    if settings['soon'] > 0 and meeting_start < (now + timedelta(minutes=settings['soon'])) and not meeting in self.soon_notified:
                         self.soon_notified.append(meeting)
                         await self._pm_attendees(meeting, server_id, "Your meeting starts soon!\n%s"%self._meeting_str(meeting, zone))
                     elif meeting_start < now and not meeting in self.now_notified:
